@@ -75,8 +75,8 @@ class MainActivity : ComponentActivity() {
         sessionManager = SessionManager(applicationContext)
 
         // Start Foreground Service to keep session alive during screen off / app switch
-        val serviceIntent = Intent(this, SessionService::class.java)
-        startForegroundService(serviceIntent)
+        //val serviceIntent = Intent(this, SessionService::class.java)
+        //startForegroundService(serviceIntent)
 
         // Immersive mode for Pixel 4a 5G
         window.insetsController?.let { controller ->
