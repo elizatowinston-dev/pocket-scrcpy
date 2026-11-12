@@ -1,0 +1,2 @@
+-keep class com.genymobile.scrcpy.** { *; }
+-keep class com.scrcpy.** { *; }
