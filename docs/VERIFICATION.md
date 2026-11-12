@@ -1,24 +1,23 @@
-# Verification & Test Report: Scrcpy for Android
+# Verification & Test Report: Pocket Scrcpy
 
 ## 1. Environment & Build Configuration
-- **Operating System:** Linux x86_64
-- **Toolchain:** OpenJDK 21.0.13, Gradle 8.11.1, AGP 8.7.3, Kotlin 2.0.21, Jetpack Compose BOM 2024.10.01
+- **Toolchain Configured:** JDK 21, Gradle 8.11.1, AGP 8.7.3, Kotlin 2.0.21, Jetpack Compose BOM 2024.10.01
 - **Target Platform:** Android SDK 35 (`compileSdk` / `targetSdk`), `minSdk` 30 (Android 11)
 - **Pinned Upstream Binary:** `scrcpy-server` v5.0.1 (SHA-256: `764eb6f79811d5211fe9df341120882ba9994c7a61b897d7bf3fb662e53bc536`)
+- **CI Workflow:** `.github/workflows/ci.yml` executes `:protocol:test`, `:adb:test`, `:app:testDebugUnitTest`, `:app:assembleDebug`, and `:app:assembleDebugSigned` on every push and PR.
 
 ---
 
-## 2. Automated Test Results (Unit Tests)
+## 2. Unit Test Suite Inventory (38 Tests Across 9 Classes)
 
-All automated unit tests pass 100% on pure JVM across both `:protocol` and `:adb` modules.
-
-Command executed:
+Commands run in CI:
 ```bash
 ./gradlew :protocol:test :adb:test --no-daemon
+./gradlew :app:testDebugUnitTest --no-daemon
 ```
 
-### Exact Test Counts by Test Class:
-- **`com.scrcpy.protocol.ProtocolTest`** (9 tests, 0 failures, 0 errors)
+### `:protocol` (26 tests across 4 classes)
+- **`com.scrcpy.protocol.ProtocolTest`** (9 tests)
   - `testInjectKeycode`
   - `testInjectText`
   - `testInjectTouchEvent`
@@ -28,63 +27,63 @@ Command executed:
   - `testDeviceMessageClipboard`
   - `testDeviceMessageAckClipboard`
   - `testStreamPacketParsing`
-- **`com.scrcpy.protocol.TouchMapperTest`** (4 tests, 0 failures, 0 errors)
+- **`com.scrcpy.protocol.TouchMapperTest`** (8 tests)
   - `testExactAspectMatch`
   - `testLetterboxMapping`
   - `testPillarboxMapping`
   - `testInvalidDimensions`
-- **`com.scrcpy.protocol.StreamDemuxerTest`** (3 tests, 0 failures, 0 errors)
+  - `testActionMoveSendsAllActivePointers`
+  - `testPointerDownAndPointerUpDispatchActionIndexOnly`
+  - `testActionCancelCancelsAndReleasesAllActivePointers`
+  - `testAndroidMotionEventActionMappingAndIgnoredActions`
+- **`com.scrcpy.protocol.StreamDemuxerTest`** (6 tests)
   - `testDeviceMetaParsing`
-  - `testCodecIdParsing`
-  - `testConfigAndKeyframePackets`
-- **`com.scrcpy.protocol.AudioStreamHeaderTest`** (3 tests, 0 failures, 0 errors)
+  - `testUpstreamVideoCodecIds`
+  - `testUpstreamSessionPacketFixture12BytesNoPayload`
+  - `testUpstreamFullVideoHandshakeAndFramesFixture`
+  - `testZeroLengthMediaPacketThrows`
+  - `testZeroDimensionSessionPacketThrows`
+- **`com.scrcpy.protocol.AudioStreamHeaderTest`** (3 tests)
   - `testRawCodecHeader`
   - `testAudioStreamDisabledExplicit`
   - `testAudioStreamConfigError`
-- **`com.scrcpy.adb.AdbMessageTest`** (3 tests, 0 failures, 0 errors)
+
+### `:adb` (7 tests across 3 classes)
+- **`com.scrcpy.adb.AdbMessageTest`** (4 tests)
   - `testAdbMessageSerialization`
   - `testAdbCryptoBlobGeneration`
   - `testAdbSignature`
-- **`com.scrcpy.adb.AdbClientTest`** (2 tests, 0 failures, 0 errors)
+  - `testLoadOrGenerateKeyPairPersistsSameKey`
+- **`com.scrcpy.adb.AdbClientTest`** (2 tests)
   - `testAdbConnectAndShellStream`
   - `testAdbStreamRefusedSurfacesError`
-- **`com.scrcpy.adb.AdbSyncTest`** (1 test, 0 failures, 0 errors)
+- **`com.scrcpy.adb.AdbSyncTest`** (1 test)
   - `testSyncSendFileProtocol`
 
-**Total: 25 tests across 7 test classes.**
+### `:app` (5 tests across 2 classes)
+- **`com.scrcpy.client.usb.UsbBulkTransferHelperTest`** (1 test)
+  - `testTimeoutIsDistinguishedFromRealIoError`
+- **`com.scrcpy.client.ServerStartupHelperTest`** (4 tests)
+  - `testOpenWithRetrySucceedsAfterTransientFailures`
+  - `testEarlyServerExitAbortsRetryAndSurfacesShellOutput`
+  - `testEarlyExitMidRetryLoopSurfacesShellOutput`
+  - `testTimeoutAfterFiveSecondsIncludesDetails`
 
 ---
 
-## 3. APK Inspection & Verification
+## 3. Server Asset Verification
 
-### Assets Verification
-Both built APKs contain the official unmodified `scrcpy-server.jar`:
+`app/src/main/assets/scrcpy-server.jar` was verified locally with `sha256sum`:
 ```
-SHA-256: 764eb6f79811d5211fe9df341120882ba9994c7a61b897d7bf3fb662e53bc536 assets/scrcpy-server.jar
-```
-
-### `aapt dump badging` Output:
-```
-package: name='com.scrcpy.client.debug' versionCode='1' versionName='1.0.0' platformBuildVersionName='15' platformBuildVersionCode='35' compileSdkVersion='35' compileSdkVersionCodename='15'
-sdkVersion:'30'
-targetSdkVersion:'35'
-uses-permission: name='android.permission.INTERNET'
-uses-permission: name='android.permission.ACCESS_NETWORK_STATE'
-uses-permission: name='android.permission.FOREGROUND_SERVICE'
-uses-permission: name='android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE'
-uses-permission: name='android.permission.POST_NOTIFICATIONS'
-application-label:'Scrcpy Android'
+764eb6f79811d5211fe9df341120882ba9994c7a61b897d7bf3fb662e53bc536  app/src/main/assets/scrcpy-server.jar
 ```
 
 ---
 
 ## 4. Hardware Testing Status & Limitations Disclosure
 
-- **What was verified:**
-  - Wire protocol encoding/decoding and JVM unit test suites against verified byte fixtures.
-  - Touch aspect-ratio letterbox/pillarbox math verified across portrait and landscape resolutions.
-  - Sync push protocol verified against loopback ADB server.
-  - Audio header decoding, raw PCM stream configuration, and disablement codes.
-- **What could NOT be verified on real hardware:**
-  - **No physical phone was connected in the build environment.** Full end-to-end performance on the Google Pixel 4a 5G and Sony Xperia 5 IV was not tested on physical silicon.
-  - Physical USB-C OTG hardware connection and kernel Wi-Fi hotspot behavior depend on physical hardware execution.
+- **What was audited against upstream `v5.0.1` & covered by JVM tests:**
+  - `scrcpy-server` `v5.0.1` options (`send_stream_meta`, `send_dummy_byte`, `send_device_meta`, `send_frame_meta`), `DesktopConnection.open()` socket accept ordering, 12-byte session vs media packet framing, and codec FourCC IDs verified directly against `Genymobile/scrcpy` `v5.0.1` sources.
+  - Persistent ADB RSA key generation/reloading, USB `bulkTransfer` timeout classification, multi-touch coordinate mapping / `ACTION_MOVE` / `ACTION_CANCEL` pointer cleanup, and server socket retry / early-exit shell error formatting.
+- **What is unverified on hardware:**
+  - **No physical phone was connected during development (`unverified on hardware`).** Live behavior on the Google Pixel 4a 5G and Sony Xperia 5 IV — including USB-C OTG `PendingIntent` permission flow, `adbd tcpip 5555` restart, `MediaCodec` rendering to `SurfaceView`, `AudioTrack` PCM output, multi-touch injection, and Wi-Fi/hotspot resilience — requires real-device testing.
