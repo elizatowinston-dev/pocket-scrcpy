@@ -18,40 +18,44 @@ An Android-to-Android scrcpy client running natively on your viewer device (**Go
 
 ## Feature Implementation Status
 
-All features below have been fully implemented in code and verified with unit tests. Physical execution on real hardware is marked accordingly:
+Features below are separated into what has unit test coverage and what still requires physical hardware verification on the Pixel 4a 5G and Sony Xperia 5 IV:
 
-- **Direct Android-to-Android Video Streaming**: Stream 60fps video directly over Wi-Fi hotspot or USB-C *(unverified on physical hardware)*.
-- **Hardware Low-Latency Decoding**: Direct decoding to `SurfaceView` using `MediaCodec` with `KEY_LOW_LATENCY = 1` *(unit-tested framing, unverified on physical hardware)*.
-- **Dynamic Multi-Touch Injection**: Real-time multi-pointer touch mapping (down, move, up, pointer-down, pointer-up) dynamically scaled from viewer display rect (accounting for letterbox/pillarbox) to the video resolution reported by server session packets *(tested in `TouchMapperTest`)*.
-- **Android 11+ Wireless Debugging Pairing**: Full implementation of TLS 1.3 with Conscrypt, RFC 5705 key export, Ed25519 SPAKE2 with BoringSSL constants, HKDF-SHA256, AES-128-GCM, and PeerInfo RSA public key exchange *(tested with loopback unit tests in `Spake25519Test`)*.
-- **Automatic Reconnection**: Backoff auto-reconnect strategy if network packets drop or server disconnects.
-- **USB OTG `adb tcpip 5555` Fallback**: Built-in one-tap OTG command runner so that when Xperia hosts a hotspot, port 5555 can be opened before switching to Wi-Fi *(unverified on physical hardware)*.
+### Unit-Tested (Pure JVM)
+- **Wire Protocol Framing & Messages**: Control/device message serialization and parsing (`ProtocolTest`, `StreamDemuxerTest`, `AudioStreamHeaderTest`).
+- **Aspect-Ratio Touch Coordinate Mapping**: Letterbox/pillarbox scaling from viewer bounds to target video resolution (`TouchMapperTest`).
+- **Native Kotlin ADB Engine**: Packet framing, RSA signing/blob formatting, stream multiplexing, and `sync:` server push (`AdbMessageTest`, `AdbClientTest`, `AdbSyncTest`).
+
+### Needs Hardware Test (Unverified on Physical Phones)
+- **Direct Android-to-Android Video Streaming**: Stream video over Wi-Fi / hotspot to port 5555 (`unverified on hardware`).
+- **Hardware Low-Latency Decoding**: `MediaCodec` decoding to `SurfaceView` with `KEY_LOW_LATENCY = 1` (`unverified on hardware`).
+- **Multi-Touch Injection on Target**: Live pointer events delivered to the Xperia screen (`unverified on hardware`).
+- **Automatic Reconnection**: Backoff auto-reconnect strategy if network packets drop or server disconnects (`unverified on hardware`).
+- **USB-C OTG `adb tcpip 5555` Setup**: One-time USB host mode setup to enable TCP/IP ADB on port 5555 before switching to Wi-Fi or hotspot (`unverified on hardware`).
 - **Broken Screen & Power Toggles**:
-  - `SET_DISPLAY_POWER(false)` toggle to keep the damaged Xperia screen dark during mirroring (saving battery and preventing ghost touches).
-  - Wake & Power button helper (`SET_DISPLAY_POWER(true)` + `KEYCODE_POWER`).
-- **Live Audio Forwarding**: Real-time audio playback via `AudioTrack` receiving 48kHz 16-bit raw stereo PCM (`audio_codec=raw`), with graceful fallback if the target device is unable to capture audio *(tested in `AudioStreamHeaderTest`)*.
-- **Two-Way Clipboard Synchronization**: Automatic capture and synchronization of device clipboard events.
-- **Foreground Service**: Background service with ongoing notification to keep the session alive when the screen turns off or another app is focused.
-- **Pixel 4a 5G Specifics**: Portrait-first with landscape rotation support, edge-to-edge window inset handling, and immersive fullscreen mode.
+  - `SET_DISPLAY_POWER(false)` toggle to keep the damaged Xperia screen dark during mirroring (`unverified on hardware`).
+  - Wake & Power button helper (`SET_DISPLAY_POWER(true)` + `KEYCODE_POWER`) (`unverified on hardware`).
+- **Live Audio Forwarding**: Real-time audio playback via `AudioTrack` receiving 48kHz 16-bit raw stereo PCM (`audio_codec=raw`) (`unverified on hardware`).
+- **Two-Way Clipboard Synchronization**: Clipboard exchange between viewer and target (`unverified on hardware`).
+- **Foreground Service**: Ongoing notification to keep the session alive (`unverified on hardware`).
+- **Pixel 4a 5G Specifics**: Portrait/landscape rotation support, edge-to-edge window inset handling, and immersive fullscreen mode (`unverified on hardware`).
 
 ---
 
-## 10-Step First-Test Checklist (Testing on Real Phones)
+## First-Test Checklist (Testing on Real Phones)
 
-Follow this 10-step sequence when testing between the Pixel 4a 5G (Viewer) and Sony Xperia 5 IV (Target):
+Follow this sequence when testing between the Pixel 4a 5G (Viewer) and Sony Xperia 5 IV (Target):
 
-1. **Physical Cable & USB Detection**: Connect Pixel and Xperia using a USB-C to USB-C cable. Confirm the Pixel pops up the Android USB accessory/host dialog.
-2. **USB OTG `tcpip:5555` Execution**: In the app, tap **USB OTG Setup**. Verify that the app connects to the Xperia ADB interface over USB host mode and returns success.
-3. **Basic ADB Shell Round-Trip**: Unplug the cable, connect both devices to the same Wi-Fi, and verify `shell:echo test` returns `test`.
-4. **ADB `sync:` Server Push**: Connect to target IP:5555 and verify that `assets/scrcpy-server.jar` is written to `/data/local/tmp/scrcpy-server.jar` with matching SHA-256 (`764eb6f798...`).
-5. **Server Launch & Handshake**: Verify that `app_process` starts the v5.0.1 server and that the client receives the dummy byte and 64-byte device name.
-6. **Video Stream & MediaCodec**: Confirm that H.264 stream starts rendering smoothly onto the Pixel's `SurfaceView` at 60 FPS.
-7. **Touch & Multi-Touch Scaling**: Tap and drag across the Pixel display; verify that touches register at the exact corresponding Xperia coordinates without aspect-ratio distortion.
-8. **Broken Screen Dark Mode**: Tap the **Screen Off** button (lock icon); confirm the Xperia screen goes completely black while the mirror on the Pixel stays active.
-9. **Wireless Debugging Pairing**: In Xperia Developer Options, open **Wireless debugging** > **Pair device with pairing code**. In the app, enter the 6-digit code and pairing port, then verify TLS 1.3 + SPAKE2 pairing completes.
-10. **Hotspot Topologies & Audio**:
-    - Test **Pixel Hotspot**: Xperia joins Pixel hotspot, connect via assigned IP.
-    - Test **Live Audio**: Toggle the audio button; verify the session cleanly restarts with `audio_codec=raw` and audio plays through the Pixel speaker.
+1. **Physical Cable & USB Detection**: Connect Pixel and Xperia using a USB-C to USB-C cable. Confirm the Pixel prompts for USB permission and detects the Xperia ADB interface.
+2. **USB OTG `tcpip:5555` Execution**: Tap **USB OTG Setup** and accept "Allow USB debugging" on the Xperia when prompted. Verify that `tcpip:5555` succeeds.
+3. **Wi-Fi / Hotspot Connection**: Unplug the USB-C cable, connect both devices to the same Wi-Fi network or hotspot, and enter the Xperia IP and port `5555`.
+4. **ADB `sync:` Server Push**: Tap **Connect to Xperia** and verify `assets/scrcpy-server.jar` is pushed to `/data/local/tmp/scrcpy-server.jar`.
+5. **Server Launch & Handshake**: Verify `app_process` starts `scrcpy-server` v5.0.1 and completes the dummy byte, 64-byte device name, codec ID, and initial session packet handshake.
+6. **Video Stream & MediaCodec**: Confirm the H.264 stream renders smoothly onto the Pixel's `SurfaceView`.
+7. **Touch & Multi-Touch Scaling**: Tap, drag, and pinch-to-zoom across the Pixel display; verify multi-touch coordinates register accurately on the Xperia.
+8. **Broken Screen Dark Mode**: Tap the **Screen Off** button (lock icon); confirm the Xperia screen goes black while the mirror on the Pixel stays active.
+9. **Hotspot Topologies & Live Audio**:
+   - Test **Pixel Hotspot** or **Xperia Hotspot** and connect via assigned IP on port 5555.
+   - Toggle **Audio** (`audio_codec=raw`) and verify 48kHz PCM audio plays through the Pixel speaker.
 
 ---
 
@@ -77,7 +81,7 @@ cd scrcpy-android
 # Fetch and verify scrcpy-server binary
 ./scripts/fetch_server.sh
 
-# Run all 29 unit tests
+# Run all 25 unit tests
 ./gradlew :protocol:test :adb:test
 
 # Build APKs

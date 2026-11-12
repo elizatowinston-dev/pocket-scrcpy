@@ -10,7 +10,7 @@ This manifest details the essential files, documentation, and build artifacts fo
 | `dist/BUILD_INFO.txt` | < 1 KB | Build environment manifest, toolchain versions, and execution log |
 | `app/src/main/assets/scrcpy-server.jar` | 734 KB | Official scrcpy-server v5.0.1 binary (`./scripts/fetch_server.sh`) |
 | `protocol/` | ~30 KB | Pure JVM protocol module (ControlMessage, DeviceMessage, TouchMapper, StreamPacket, AudioStreamHeader) |
-| `adb/` | ~50 KB | Pure Kotlin ADB module (AdbClient, AdbSync, AdbCrypto, Spake25519, PairingCipher, AdbPairingClient) |
+| `adb/` | ~25 KB | Pure Kotlin ADB module (`AdbClient`, `AdbStream`, `AdbSync`, `AdbCrypto`, `AdbMessage`) |
 | `app/` | ~800 KB | Android application module (Jetpack Compose UI, MediaCodec pipeline, UsbTransport, Foreground Service) |
 | `docs/VERIFICATION.md` | ~4 KB | Detailed verification report, exact unit test counts, and aapt inspection output |
 | `README.md` | ~6 KB | Complete project guide, architecture diagram, 10-step first-test checklist, and setup instructions |

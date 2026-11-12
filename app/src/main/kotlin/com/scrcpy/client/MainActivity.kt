@@ -32,13 +32,9 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.scrcpy.adb.AdbClient
 import com.scrcpy.adb.AdbCrypto
-import com.scrcpy.adb.AdbPairingClient
 import com.scrcpy.client.usb.AdbUsbTransport
 import com.scrcpy.protocol.ControlMessage
 import com.scrcpy.protocol.TouchMapper
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 
 class MainActivity : ComponentActivity() {
 
@@ -100,19 +96,14 @@ fun ScrcpyApp(sessionManager: SessionManager, onUsbTcpipFallback: () -> String) 
 
     var host by remember { mutableStateOf("192.168.43.1") }
     var port by remember { mutableStateOf("5555") }
-    var pairingPort by remember { mutableStateOf("37000") }
-    var pairingCode by remember { mutableStateOf("") }
-    var showPairDialog by remember { mutableStateOf(false) }
     var showUsbDialog by remember { mutableStateOf(false) }
     var usbStatus by remember { mutableStateOf<String?>(null) }
-    var pairingStatus by remember { mutableStateOf<String?>(null) }
 
     var turnScreenOff by remember { mutableStateOf(true) }
     var stayAwake by remember { mutableStateOf(true) }
     var enableAudio by remember { mutableStateOf(false) }
 
     var boundSurface by remember { mutableStateOf<android.view.Surface?>(null) }
-    val coroutineScope = rememberCoroutineScope()
 
     MaterialTheme {
         Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
@@ -185,23 +176,14 @@ fun ScrcpyApp(sessionManager: SessionManager, onUsbTcpipFallback: () -> String) 
 
                         Spacer(modifier = Modifier.height(16.dp))
 
-                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            OutlinedButton(
-                                onClick = { showPairDialog = true },
-                                modifier = Modifier.weight(1f)
-                            ) {
-                                Text("Wireless Pair")
-                            }
-
-                            OutlinedButton(
-                                onClick = {
-                                    showUsbDialog = true
-                                    usbStatus = onUsbTcpipFallback()
-                                },
-                                modifier = Modifier.weight(1f)
-                            ) {
-                                Text("USB OTG Setup")
-                            }
+                        OutlinedButton(
+                            onClick = {
+                                showUsbDialog = true
+                                usbStatus = onUsbTcpipFallback()
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text("USB OTG Setup (adb tcpip 5555)")
                         }
 
                         Spacer(modifier = Modifier.height(8.dp))
@@ -242,59 +224,6 @@ fun ScrcpyApp(sessionManager: SessionManager, onUsbTcpipFallback: () -> String) 
                         },
                         modifier = Modifier.size(1.dp)
                     )
-
-                    if (showPairDialog) {
-                        AlertDialog(
-                            onDismissRequest = { showPairDialog = false },
-                            title = { Text("Wireless Debugging Pairing") },
-                            text = {
-                                Column {
-                                    Text("Enter pairing code from Xperia Wireless Debugging settings:")
-                                    Spacer(modifier = Modifier.height(8.dp))
-                                    OutlinedTextField(
-                                        value = pairingPort,
-                                        onValueChange = { pairingPort = it },
-                                        label = { Text("Pairing Port") }
-                                    )
-                                    Spacer(modifier = Modifier.height(8.dp))
-                                    OutlinedTextField(
-                                        value = pairingCode,
-                                        onValueChange = { pairingCode = it },
-                                        label = { Text("6-digit Code") }
-                                    )
-                                    if (pairingStatus != null) {
-                                        Spacer(modifier = Modifier.height(8.dp))
-                                        Text(pairingStatus!!, color = MaterialTheme.colorScheme.primary)
-                                    }
-                                }
-                            },
-                            confirmButton = {
-                                Button(onClick = {
-                                    coroutineScope.launch {
-                                        pairingStatus = "Pairing with SPAKE2 / Conscrypt TLS..."
-                                        try {
-                                            val client = AdbPairingClient(
-                                                host,
-                                                pairingPort.toIntOrNull() ?: 37000,
-                                                pairingCode
-                                            )
-                                            val res = withContext(Dispatchers.IO) { client.pair() }
-                                            pairingStatus = if (res) "Paired successfully!" else "Pairing failed"
-                                        } catch (e: Exception) {
-                                            pairingStatus = "Error: ${e.message}"
-                                        }
-                                    }
-                                }) {
-                                    Text("Start Pairing")
-                                }
-                            },
-                            dismissButton = {
-                                TextButton(onClick = { showPairDialog = false }) {
-                                    Text("Close")
-                                }
-                            }
-                        )
-                    }
 
                     if (showUsbDialog) {
                         AlertDialog(

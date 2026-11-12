@@ -28,9 +28,6 @@ android {
             excludes += "META-INF/versions/9/OSGI-INF/MANIFEST.MF"
             excludes += "META-INF/INDEX.LIST"
             excludes += "META-INF/io.netty.versions.properties"
-            excludes += "org/bouncycastle/pqc/**"
-            excludes += "org/bouncycastle/x509/**"
-            excludes += "org/bouncycastle/pkix/**"
         }
     }
 
@@ -72,8 +69,6 @@ android {
 dependencies {
     implementation(project(":protocol"))
     implementation(project(":adb"))
-
-    implementation(libs.conscrypt.android)
 
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)

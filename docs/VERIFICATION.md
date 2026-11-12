@@ -50,13 +50,8 @@ Command executed:
   - `testAdbStreamRefusedSurfacesError`
 - **`com.scrcpy.adb.AdbSyncTest`** (1 test, 0 failures, 0 errors)
   - `testSyncSendFileProtocol`
-- **`com.scrcpy.adb.Spake25519Test`** (4 tests, 0 failures, 0 errors)
-  - `testSpake2KeyAgreement`
-  - `testPairingCipherAes128Gcm`
-  - `testFullPairingProtocolSuccess`
-  - `testPairingFailsWithWrongPairingCode`
 
-**Total: 29 tests executed, 29 passed, 0 failed.**
+**Total: 25 tests across 7 test classes.**
 
 ---
 
@@ -86,8 +81,7 @@ application-label:'Scrcpy Android'
 ## 4. Hardware Testing Status & Limitations Disclosure
 
 - **What was verified:**
-  - Automated compilation, lint checks, and JVM unit test suites against verified byte fixtures.
-  - SPAKE2 key agreement and full pairing state machine tested against loopback threads.
+  - Wire protocol encoding/decoding and JVM unit test suites against verified byte fixtures.
   - Touch aspect-ratio letterbox/pillarbox math verified across portrait and landscape resolutions.
   - Sync push protocol verified against loopback ADB server.
   - Audio header decoding, raw PCM stream configuration, and disablement codes.

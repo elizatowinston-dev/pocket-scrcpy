@@ -10,9 +10,8 @@
   - Little-endian packet framing (`CNXN`, `OPEN`, `OKAY`, `WRTE`, `CLSE`, `AUTH`).
   - RSA key generation and ADB token signing using SHA-1 PKCS#1 v1.5 padding and the 524-byte public key blob format.
   - ADB `sync:` file transfer protocol for pushing `scrcpy-server.jar`.
-  - Android 11+ Wireless Debugging Pairing via TLS/SPAKE2.
-  - Android USB Host mode (`UsbManager` and `UsbDeviceConnection`) bulk transfer abstraction.
-- **Rationale:** Existing standalone Kotlin libraries (such as `dadb`) lack Android USB host transport and Android 11 TLS pairing integration without bloated native JNI dependencies.
+  - Android USB Host mode (`UsbManager` and `UsbDeviceConnection`) bulk transfer abstraction for the one-time `adb tcpip 5555` setup.
+- **Rationale:** Existing standalone Kotlin libraries (such as `dadb`) do not provide Android USB host transport without extra dependencies. Keeping the native Kotlin ADB implementation zero-dependency avoids native JNI or large crypto libraries.
 
 ## 3. Tunneling & Port Forwarding Strategy
 - **Decision:** Configured `tunnel_forward=true` on the server options.
@@ -24,4 +23,4 @@
 
 ## 5. Broken Screen & Hotspot Handling
 - **Decision:** Added explicit `SET_DISPLAY_POWER` toggles and documented USB OTG fallback for `adb tcpip 5555`.
-- **Rationale:** Android devices hosting Wi-Fi hotspots frequently disable MDNS and wireless debugging pairing on the softap network interface. Using a one-time USB-C connection to run `adb tcpip 5555` ensures reliable Wi-Fi streaming over the Xperia hotspot.
+- **Rationale:** Android devices hosting Wi-Fi hotspots typically require TCP/IP ADB on port 5555 rather than mDNS discovery on the softap network interface. Using a one-time USB-C connection to run `adb tcpip 5555` ensures reliable Wi-Fi streaming over the Xperia hotspot or shared Wi-Fi network.
