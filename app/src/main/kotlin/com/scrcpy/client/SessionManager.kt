@@ -33,6 +33,7 @@ class SessionManager(private val context: Context) {
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
     private var adbClient: AdbClient? = null
+    private var serverStream: AdbStream? = null
     private var controlStream: AdbStream? = null
     private var controlOutboundChannel: Channel<ControlMessage>? = null
     private var videoStream: AdbStream? = null
@@ -43,6 +44,7 @@ class SessionManager(private val context: Context) {
 
     private val isRunning = AtomicBoolean(false)
     private var connectionJob: Job? = null
+    private var reconnectJob: Job? = null
 
     private val _state = MutableStateFlow<SessionState>(SessionState.Idle)
     val state = _state.asStateFlow()
@@ -80,6 +82,8 @@ class SessionManager(private val context: Context) {
         bitRate: Int = 8_000_000,
         maxFps: Int = 60
     ) {
+        reconnectJob?.cancel()
+        reconnectJob = null
         lastHost = host
         lastPort = port
         lastSurface = videoSurface
@@ -95,8 +99,11 @@ class SessionManager(private val context: Context) {
 
     private fun startConnectionLoop() {
         if (isRunning.getAndSet(true)) return
+        reconnectJob?.cancel()
+        reconnectJob = null
 
         connectionJob = scope.launch {
+            var currentShellMonitor: ServerShellMonitor? = null
             try {
                 _state.value = SessionState.Connecting("Connecting to ADB at $lastHost:$lastPort...")
 
@@ -143,18 +150,33 @@ class SessionManager(private val context: Context) {
                 val serverCmd = "CLASSPATH=/data/local/tmp/scrcpy-server.jar app_process / com.genymobile.scrcpy.Server 5.0.1 $options"
 
                 _state.value = SessionState.Connecting("Starting server on device...")
-                client.shell(serverCmd)
-
-                delay(600)
+                val sStream = client.shell(serverCmd)
+                serverStream = sStream
+                val shellMonitor = ServerShellMonitor(sStream.inputStream)
+                currentShellMonitor = shellMonitor
+                launch(Dispatchers.IO) { shellMonitor.readLoop() }
 
                 // Upstream DesktopConnection.open() accepts sockets in strict order:
                 // video (sends dummy byte if enabled), audio (if enabled), then control.
                 // Device meta and stream headers are only written AFTER all enabled sockets connect.
-                _state.value = SessionState.Connecting("Connecting video stream...")
+                _state.value = SessionState.Connecting("Waiting for scrcpy-server socket...")
                 val abstractName = "localabstract:scrcpy_$scidHex"
-                val vStream = client.open(abstractName)
+                val vStream = ServerStartupHelper.openWithRetry(
+                    hasServerExited = { shellMonitor.hasExited },
+                    serverOutput = { shellMonitor.output() }
+                ) {
+                    val stream = client.open(abstractName)
+                    try {
+                        StreamPacket.readDummyByte(stream.inputStream)
+                        stream
+                    } catch (e: Exception) {
+                        try {
+                            stream.close()
+                        } catch (_: Exception) {}
+                        throw e
+                    }
+                }
                 videoStream = vStream
-                StreamPacket.readDummyByte(vStream.inputStream)
 
                 val aStream = if (lastEnableAudio) {
                     _state.value = SessionState.Connecting("Connecting audio stream...")
@@ -216,9 +238,26 @@ class SessionManager(private val context: Context) {
                     sendControlMessage(ControlMessage.SetDisplayPower(false))
                 }
 
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: ServerStartupException) {
+                if (e.earlyExit) {
+                    disconnect(
+                        reconnect = false,
+                        errorMessage = e.message ?: "scrcpy-server exited early"
+                    )
+                } else {
+                    handleDisconnectOrReconnect(errorMessage = e.message ?: "Connection failed")
+                }
             } catch (e: Exception) {
-                _state.value = SessionState.Error(e.message ?: "Connection failed")
-                handleDisconnectOrReconnect()
+                val exited = currentShellMonitor?.hasExited == true
+                val shellOut = if (exited) currentShellMonitor?.output().orEmpty() else ""
+                if (exited) {
+                    val msg = ServerStartupHelper.formatEarlyExitError(shellOut, e)
+                    disconnect(reconnect = false, errorMessage = msg)
+                } else {
+                    handleDisconnectOrReconnect(errorMessage = e.message ?: "Connection failed")
+                }
             }
         }
     }
@@ -341,7 +380,7 @@ class SessionManager(private val context: Context) {
             }
         } catch (e: Exception) {
             if (isRunning.get()) {
-                handleDisconnectOrReconnect()
+                handleDisconnectOrReconnect(errorMessage = e.message ?: "Video stream disconnected")
             }
         }
     }
@@ -435,12 +474,16 @@ class SessionManager(private val context: Context) {
         sendControlMessage(ControlMessage.InjectKeycode(1, ControlMessage.KEYCODE_POWER))
     }
 
-    private fun handleDisconnectOrReconnect() {
-        disconnect(reconnect = autoReconnectEnabled)
+    private fun handleDisconnectOrReconnect(errorMessage: String? = null) {
+        disconnect(reconnect = autoReconnectEnabled, errorMessage = errorMessage)
     }
 
-    fun disconnect(reconnect: Boolean = false) {
+    fun disconnect(reconnect: Boolean = false, errorMessage: String? = null) {
         isRunning.set(false)
+        if (!reconnect) {
+            reconnectJob?.cancel()
+            reconnectJob = null
+        }
         connectionJob?.cancel()
 
         try {
@@ -464,23 +507,30 @@ class SessionManager(private val context: Context) {
             controlStream?.close()
             videoStream?.close()
             audioStream?.close()
+            serverStream?.close()
             adbClient?.close()
         } catch (_: Exception) {}
         controlStream = null
         videoStream = null
         audioStream = null
+        serverStream = null
         adbClient = null
 
         if (reconnect && reconnectAttempts < 5) {
             reconnectAttempts++
             val backoff = (reconnectAttempts * 1000L).coerceAtMost(5000L)
-            scope.launch {
-                _state.value = SessionState.Connecting("Connection lost. Reconnecting in ${backoff / 1000}s (attempt $reconnectAttempts)...")
+            val prefix = errorMessage?.let { "$it. " } ?: "Connection lost. "
+            reconnectJob = scope.launch {
+                _state.value = SessionState.Connecting("${prefix}Reconnecting in ${backoff / 1000}s (attempt $reconnectAttempts)...")
                 delay(backoff)
                 startConnectionLoop()
             }
         } else {
-            _state.value = SessionState.Idle
+            _state.value = if (errorMessage != null) {
+                SessionState.Error(errorMessage)
+            } else {
+                SessionState.Idle
+            }
         }
     }
 }
