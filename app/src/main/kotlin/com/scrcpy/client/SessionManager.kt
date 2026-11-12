@@ -19,6 +19,7 @@ import com.scrcpy.protocol.StreamPacket
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import java.io.File
 import java.io.InputStream
 import java.net.Socket
 import java.nio.ByteBuffer
@@ -96,7 +97,7 @@ class SessionManager(private val context: Context) {
             try {
                 _state.value = SessionState.Connecting("Connecting to ADB at $lastHost:$lastPort...")
 
-                val keyPair = AdbCrypto.generateKeyPair()
+                val keyPair = AdbCrypto.loadOrGenerateKeyPair(File(context.noBackupFilesDir, "adb"))
                 val adbSocket = Socket(lastHost, lastPort)
                 val client = AdbClient(adbSocket, keyPair)
                 client.connect()

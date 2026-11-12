@@ -5,6 +5,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Test
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
+import java.nio.file.Files
 import java.security.interfaces.RSAPrivateKey
 import java.security.interfaces.RSAPublicKey
 
@@ -52,5 +53,29 @@ class AdbMessageTest {
         val token = ByteArray(20) { it.toByte() }
         val sig = AdbCrypto.sign(keyPair.private, token)
         assertEquals(256, sig.size)
+    }
+
+    @Test
+    fun testLoadOrGenerateKeyPairPersistsSameKey() {
+        val tempDir = Files.createTempDirectory("adb-key-test").toFile()
+        try {
+            val first = AdbCrypto.loadOrGenerateKeyPair(tempDir)
+            val second = AdbCrypto.loadOrGenerateKeyPair(tempDir)
+
+            assertArrayEquals(first.public.encoded, second.public.encoded)
+            assertArrayEquals(first.private.encoded, second.private.encoded)
+            assertArrayEquals(
+                AdbCrypto.convertRsaPublicKeyToAdbBlob(first.public as RSAPublicKey),
+                AdbCrypto.convertRsaPublicKeyToAdbBlob(second.public as RSAPublicKey)
+            )
+
+            val token = ByteArray(20) { (it * 3).toByte() }
+            assertArrayEquals(
+                AdbCrypto.sign(first.private, token),
+                AdbCrypto.sign(second.private, token)
+            )
+        } finally {
+            tempDir.deleteRecursively()
+        }
     }
 }

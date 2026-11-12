@@ -1,25 +1,69 @@
 package com.scrcpy.adb
 
+import java.io.File
 import java.math.BigInteger
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import java.security.KeyFactory
 import java.security.KeyPair
 import java.security.KeyPairGenerator
 import java.security.PrivateKey
 import java.security.SecureRandom
 import java.security.interfaces.RSAPrivateKey
 import java.security.interfaces.RSAPublicKey
+import java.security.spec.PKCS8EncodedKeySpec
+import java.security.spec.X509EncodedKeySpec
 import java.util.Base64
 import javax.crypto.Cipher
 
 object AdbCrypto {
     private const val ANDROID_RSA_MODULUS_LEN_WORDS = 64 // 2048 / 32
     private const val ANDROID_RSA_MODULUS_LEN_BYTES = ANDROID_RSA_MODULUS_LEN_WORDS * 4
+    private const val PRIVATE_KEY_FILENAME = "adbkey"
+    private const val PUBLIC_KEY_FILENAME = "adbkey.pub"
+    private val keyLock = Any()
 
     fun generateKeyPair(): KeyPair {
         val kpg = KeyPairGenerator.getInstance("RSA")
         kpg.initialize(2048, SecureRandom())
         return kpg.generateKeyPair()
+    }
+
+    /**
+     * Loads the persistent ADB RSA keypair from [storageDir], or generates and saves
+     * a new 2048-bit RSA keypair on first run.
+     */
+    fun loadOrGenerateKeyPair(storageDir: File): KeyPair = synchronized(keyLock) {
+        val privateFile = File(storageDir, PRIVATE_KEY_FILENAME)
+        val publicFile = File(storageDir, PUBLIC_KEY_FILENAME)
+
+        if (privateFile.exists() && publicFile.exists()) {
+            try {
+                val keyFactory = KeyFactory.getInstance("RSA")
+                val privateKey = keyFactory.generatePrivate(PKCS8EncodedKeySpec(privateFile.readBytes()))
+                val publicKey = keyFactory.generatePublic(X509EncodedKeySpec(publicFile.readBytes()))
+                if (privateKey is RSAPrivateKey && publicKey is RSAPublicKey &&
+                    privateKey.modulus == publicKey.modulus
+                ) {
+                    return@synchronized KeyPair(publicKey, privateKey)
+                }
+            } catch (_: Exception) {
+                // Corrupt or unreadable key files; fall through to regenerate
+            }
+        }
+
+        if (!storageDir.exists()) {
+            storageDir.mkdirs()
+        }
+
+        val keyPair = generateKeyPair()
+        privateFile.writeBytes(keyPair.private.encoded)
+        privateFile.setReadable(false, false)
+        privateFile.setReadable(true, true)
+        privateFile.setWritable(false, false)
+        privateFile.setWritable(true, true)
+        publicFile.writeBytes(keyPair.public.encoded)
+        return@synchronized keyPair
     }
 
     fun sign(privateKey: PrivateKey, token: ByteArray): ByteArray {

@@ -35,6 +35,7 @@ import com.scrcpy.adb.AdbCrypto
 import com.scrcpy.client.usb.AdbUsbTransport
 import com.scrcpy.protocol.ControlMessage
 import com.scrcpy.protocol.TouchMapper
+import java.io.File
 
 class MainActivity : ComponentActivity() {
 
@@ -67,7 +68,7 @@ class MainActivity : ComponentActivity() {
         return try {
             val connection = usbManager.openDevice(targetUsb) ?: return "Cannot open USB device. Grant USB permissions."
             val transport = AdbUsbTransport(usbManager, targetUsb, connection)
-            val keyPair = AdbCrypto.generateKeyPair()
+            val keyPair = AdbCrypto.loadOrGenerateKeyPair(File(applicationContext.noBackupFilesDir, "adb"))
             val client = AdbClient(transport.inputStream, transport.outputStream, keyPair)
             client.connect()
             // Execute adb tcpip 5555
