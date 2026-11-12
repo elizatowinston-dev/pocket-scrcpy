@@ -115,9 +115,11 @@ class ProtocolTest {
         dos.flush()
 
         val packet = StreamPacket.readPacket(ByteArrayInputStream(bos.toByteArray()))
-        assertEquals(pts, packet.pts)
-        assertTrue(packet.isKeyFrame)
-        assertEquals(false, packet.isConfig)
-        assertArrayEquals(testData, packet.data)
+        assertTrue(packet is StreamPacket.Media)
+        val media = packet as StreamPacket.Media
+        assertEquals(pts, media.pts)
+        assertTrue(media.isKeyFrame)
+        assertEquals(false, media.isConfig)
+        assertArrayEquals(testData, media.data)
     }
 }

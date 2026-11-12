@@ -20,10 +20,11 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import java.io.File
+import java.io.IOException
 import java.io.InputStream
 import java.net.Socket
-import java.nio.ByteBuffer
 import java.security.SecureRandom
+import java.util.Locale
 import java.util.concurrent.atomic.AtomicBoolean
 
 class SessionManager(private val context: Context) {
@@ -113,12 +114,13 @@ class SessionManager(private val context: Context) {
 
                 // Random 31-bit SCID as required by scrcpy
                 val scid = SecureRandom().nextInt(0x7FFFFFFF)
-                val scidHex = String.format("%08x", scid)
+                val scidHex = String.format(Locale.US, "%08x", scid)
 
                 val options = buildList {
                     add("scid=$scidHex")
                     add("log_level=info")
                     add("video=true")
+                    add("video_codec=h264")
                     add("audio=$lastEnableAudio")
                     if (lastEnableAudio) {
                         add("audio_codec=raw") // 48kHz 16-bit stereo PCM
@@ -143,50 +145,66 @@ class SessionManager(private val context: Context) {
 
                 delay(600)
 
+                // Upstream DesktopConnection.open() accepts sockets in strict order:
+                // video (sends dummy byte if enabled), audio (if enabled), then control.
+                // Device meta and stream headers are only written AFTER all enabled sockets connect.
                 _state.value = SessionState.Connecting("Connecting video stream...")
                 val abstractName = "localabstract:scrcpy_$scidHex"
                 val vStream = client.open(abstractName)
                 videoStream = vStream
+                StreamPacket.readDummyByte(vStream.inputStream)
 
-                // Upstream scrcpy handshake:
-                // 1. Dummy byte if send_dummy_byte=true
-                vStream.inputStream.read()
-                // 2. 64-byte device name
-                val deviceName = StreamPacket.readDeviceMeta(vStream.inputStream)
-                // 3. 4-byte codec id
-                StreamPacket.readCodecId(vStream.inputStream)
-
-                // Socket accept order: video, then audio (if enabled), then control
-                if (lastEnableAudio) {
+                val aStream = if (lastEnableAudio) {
                     _state.value = SessionState.Connecting("Connecting audio stream...")
-                    val aStream = client.open(abstractName)
-                    audioStream = aStream
-                    val audioHeader = AudioStreamHeader.read(aStream.inputStream)
-                    if (audioHeader.isDisabled) {
-                        if (audioHeader.isConfigError) {
-                            _userMessage.value = "Target audio configuration error. Continuing video only."
-                        } else {
-                            _userMessage.value = "Audio capture unsupported or disabled on device (requires Android 11+). Continuing video only."
-                        }
-                    } else {
-                        initAudioTrack()
-                        launch { handleAudioStream(aStream.inputStream) }
-                    }
+                    client.open(abstractName).also { audioStream = it }
+                } else {
+                    null
                 }
 
                 _state.value = SessionState.Connecting("Connecting control stream...")
                 val cStream = client.open(abstractName)
                 controlStream = cStream
 
+                _state.value = SessionState.Connecting("Reading stream metadata...")
+                val deviceName = StreamPacket.readDeviceMeta(vStream.inputStream)
+                val videoCodecId = StreamPacket.readCodecId(vStream.inputStream)
+                val videoMimeType = when (videoCodecId) {
+                    StreamPacket.STREAM_DISABLED_EXPLICIT ->
+                        throw IOException("Video stream explicitly disabled by target device")
+                    StreamPacket.STREAM_DISABLED_CONFIG_ERROR ->
+                        throw IOException("Video encoder configuration error on target device")
+                    StreamPacket.CODEC_H264 -> MediaFormat.MIMETYPE_VIDEO_AVC
+                    StreamPacket.CODEC_H265 -> MediaFormat.MIMETYPE_VIDEO_HEVC
+                    StreamPacket.CODEC_AV1 -> MediaFormat.MIMETYPE_VIDEO_AV1
+                    StreamPacket.CODEC_VP8 -> MediaFormat.MIMETYPE_VIDEO_VP8
+                    StreamPacket.CODEC_VP9 -> MediaFormat.MIMETYPE_VIDEO_VP9
+                    else -> throw IOException(
+                        "Unsupported video codec ID: 0x${String.format(Locale.US, "%08x", videoCodecId)}"
+                    )
+                }
+
+                val initialSession = StreamPacket.readPacket(vStream.inputStream)
+                if (initialSession !is StreamPacket.Session) {
+                    throw IOException("Expected initial video session packet after codec header")
+                }
+                targetWidth = initialSession.width
+                targetHeight = initialSession.height
+                _stats.value = SessionStats(targetWidth, targetHeight, 0f, 0L)
+
                 _state.value = SessionState.Connected(deviceName)
 
                 // Start control message reader
                 launch { handleControlReplies(cStream.inputStream) }
 
+                // Start audio stream reader if enabled
+                if (aStream != null) {
+                    launch { startAndHandleAudioStream(aStream) }
+                }
+
                 // Start video decoder
                 lastSurface?.let { surface ->
-                    initMediaCodec(surface, targetWidth, targetHeight)
-                    launch { handleVideoStream(vStream.inputStream) }
+                    val codec = initMediaCodec(surface, targetWidth, targetHeight, videoMimeType)
+                    launch { handleVideoStream(vStream.inputStream, surface, videoMimeType, codec) }
                 }
 
                 if (lastTurnScreenOff) {
@@ -200,19 +218,25 @@ class SessionManager(private val context: Context) {
         }
     }
 
-    private fun initMediaCodec(surface: Surface, width: Int, height: Int) {
+    private fun initMediaCodec(
+        surface: Surface,
+        width: Int,
+        height: Int,
+        mimeType: String = MediaFormat.MIMETYPE_VIDEO_AVC
+    ): MediaCodec {
         try {
             videoDecoder?.stop()
             videoDecoder?.release()
         } catch (_: Exception) {}
 
-        val format = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, width, height).apply {
+        val format = MediaFormat.createVideoFormat(mimeType, width, height).apply {
             setInteger(MediaFormat.KEY_LOW_LATENCY, 1)
         }
-        val codec = MediaCodec.createDecoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
+        val codec = MediaCodec.createDecoderByType(mimeType)
         codec.configure(format, surface, null, 0)
         codec.start()
         videoDecoder = codec
+        return codec
     }
 
     private fun initAudioTrack() {
@@ -240,48 +264,74 @@ class SessionManager(private val context: Context) {
             .build().apply { play() }
     }
 
-    private fun handleVideoStream(input: InputStream) {
-        val codec = videoDecoder ?: return
+    private fun drainVideoOutput(codec: MediaCodec, bufferInfo: MediaCodec.BufferInfo): Int {
+        var rendered = 0
+        while (isRunning.get()) {
+            val outIndex = codec.dequeueOutputBuffer(bufferInfo, 0)
+            if (outIndex >= 0) {
+                codec.releaseOutputBuffer(outIndex, true)
+                rendered++
+            } else if (outIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
+                continue
+            } else {
+                break
+            }
+        }
+        return rendered
+    }
+
+    private fun handleVideoStream(
+        input: InputStream,
+        surface: Surface,
+        mimeType: String,
+        initialCodec: MediaCodec
+    ) {
+        var codec = initialCodec
         val bufferInfo = MediaCodec.BufferInfo()
         var frameCount = 0
         var lastTime = System.currentTimeMillis()
 
         try {
             while (isRunning.get()) {
-                val packet = StreamPacket.readPacket(input)
-
-                // Update resolution on session packet
-                if (packet.pts and StreamPacket.PACKET_FLAG_SESSION != 0L) {
-                    val buf = ByteBuffer.wrap(packet.data)
-                    if (packet.data.size >= 8) {
-                        targetWidth = buf.getInt()
-                        targetHeight = buf.getInt()
+                when (val packet = StreamPacket.readPacket(input)) {
+                    is StreamPacket.Session -> {
+                        if (packet.width != targetWidth || packet.height != targetHeight) {
+                            targetWidth = packet.width
+                            targetHeight = packet.height
+                            _stats.value = _stats.value.copy(width = targetWidth, height = targetHeight)
+                            codec = initMediaCodec(surface, targetWidth, targetHeight, mimeType)
+                        }
                     }
-                    continue
-                }
+                    is StreamPacket.Media -> {
+                        var inIndex = -1
+                        while (isRunning.get()) {
+                            frameCount += drainVideoOutput(codec, bufferInfo)
+                            inIndex = codec.dequeueInputBuffer(10_000)
+                            if (inIndex >= 0) break
+                        }
+                        if (!isRunning.get() || inIndex < 0) break
 
-                val inIndex = codec.dequeueInputBuffer(10_000)
-                if (inIndex >= 0) {
-                    val inBuffer = codec.getInputBuffer(inIndex)
-                    inBuffer?.clear()
-                    inBuffer?.put(packet.data)
-                    val flags = if (packet.isConfig) MediaCodec.BUFFER_FLAG_CODEC_CONFIG else 0
-                    codec.queueInputBuffer(inIndex, 0, packet.data.size, packet.pts, flags)
-                }
+                        val inBuffer = codec.getInputBuffer(inIndex)
+                        if (inBuffer != null) {
+                            inBuffer.clear()
+                            inBuffer.put(packet.data)
+                        }
+                        val flags = when {
+                            packet.isConfig -> MediaCodec.BUFFER_FLAG_CODEC_CONFIG
+                            packet.isKeyFrame -> MediaCodec.BUFFER_FLAG_KEY_FRAME
+                            else -> 0
+                        }
+                        codec.queueInputBuffer(inIndex, 0, packet.data.size, packet.pts, flags)
+                        frameCount += drainVideoOutput(codec, bufferInfo)
 
-                var outIndex = codec.dequeueOutputBuffer(bufferInfo, 0)
-                while (outIndex >= 0) {
-                    codec.releaseOutputBuffer(outIndex, true)
-                    frameCount++
-                    outIndex = codec.dequeueOutputBuffer(bufferInfo, 0)
-                }
-
-                val now = System.currentTimeMillis()
-                if (now - lastTime >= 1000) {
-                    val fps = frameCount * 1000f / (now - lastTime)
-                    _stats.value = SessionStats(targetWidth, targetHeight, fps, 0L)
-                    frameCount = 0
-                    lastTime = now
+                        val now = System.currentTimeMillis()
+                        if (now - lastTime >= 1000) {
+                            val fps = frameCount * 1000f / (now - lastTime)
+                            _stats.value = SessionStats(targetWidth, targetHeight, fps, 0L)
+                            frameCount = 0
+                            lastTime = now
+                        }
+                    }
                 }
             }
         } catch (e: Exception) {
@@ -291,12 +341,36 @@ class SessionManager(private val context: Context) {
         }
     }
 
+    private fun startAndHandleAudioStream(aStream: AdbStream) {
+        try {
+            val audioHeader = AudioStreamHeader.read(aStream.inputStream)
+            if (audioHeader.isDisabled) {
+                _userMessage.value = if (audioHeader.isConfigError) {
+                    "Target audio configuration error. Continuing video only."
+                } else {
+                    "Audio capture unsupported or disabled on device (requires Android 11+). Continuing video only."
+                }
+                try {
+                    aStream.close()
+                } catch (_: Exception) {}
+                return
+            }
+            if (!isRunning.get()) return
+            initAudioTrack()
+            handleAudioStream(aStream.inputStream)
+        } catch (_: Exception) {}
+    }
+
     private fun handleAudioStream(input: InputStream) {
         try {
             while (isRunning.get()) {
-                val packet = StreamPacket.readPacket(input)
-                // Write raw 48kHz stereo 16-bit PCM buffer directly into AudioTrack
-                audioTrack?.write(packet.data, 0, packet.data.size)
+                when (val packet = StreamPacket.readPacket(input)) {
+                    is StreamPacket.Media -> {
+                        // Write raw 48kHz stereo 16-bit PCM buffer directly into AudioTrack
+                        audioTrack?.write(packet.data, 0, packet.data.size)
+                    }
+                    is StreamPacket.Session -> Unit
+                }
             }
         } catch (_: Exception) {}
     }
