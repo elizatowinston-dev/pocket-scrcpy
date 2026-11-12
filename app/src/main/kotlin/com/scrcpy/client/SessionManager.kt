@@ -17,6 +17,7 @@ import com.scrcpy.protocol.ControlMessage
 import com.scrcpy.protocol.DeviceMessage
 import com.scrcpy.protocol.StreamPacket
 import kotlinx.coroutines.*
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import java.io.File
@@ -33,6 +34,7 @@ class SessionManager(private val context: Context) {
 
     private var adbClient: AdbClient? = null
     private var controlStream: AdbStream? = null
+    private var controlOutboundChannel: Channel<ControlMessage>? = null
     private var videoStream: AdbStream? = null
     private var audioStream: AdbStream? = null
 
@@ -193,7 +195,10 @@ class SessionManager(private val context: Context) {
 
                 _state.value = SessionState.Connected(deviceName)
 
-                // Start control message reader
+                // Start control message reader and serialized outbound writer
+                val txChannel = Channel<ControlMessage>(Channel.UNLIMITED)
+                controlOutboundChannel = txChannel
+                launch { handleControlOutbound(cStream, txChannel) }
                 launch { handleControlReplies(cStream.inputStream) }
 
                 // Start audio stream reader if enabled
@@ -393,14 +398,24 @@ class SessionManager(private val context: Context) {
         } catch (_: Exception) {}
     }
 
-    fun sendControlMessage(msg: ControlMessage) {
-        val stream = controlStream ?: return
-        scope.launch {
-            try {
+    private suspend fun handleControlOutbound(stream: AdbStream, channel: Channel<ControlMessage>) {
+        try {
+            for (msg in channel) {
                 val bytes = msg.toByteArray()
                 stream.outputStream.write(bytes)
                 stream.outputStream.flush()
-            } catch (_: Exception) {}
+            }
+        } catch (_: Exception) {}
+    }
+
+    fun sendControlMessage(msg: ControlMessage) {
+        controlOutboundChannel?.trySend(msg)
+    }
+
+    fun sendControlMessages(messages: List<ControlMessage>) {
+        val channel = controlOutboundChannel ?: return
+        for (msg in messages) {
+            channel.trySend(msg)
         }
     }
 
@@ -439,6 +454,11 @@ class SessionManager(private val context: Context) {
             audioTrack?.release()
         } catch (_: Exception) {}
         audioTrack = null
+
+        try {
+            controlOutboundChannel?.close()
+        } catch (_: Exception) {}
+        controlOutboundChannel = null
 
         try {
             controlStream?.close()

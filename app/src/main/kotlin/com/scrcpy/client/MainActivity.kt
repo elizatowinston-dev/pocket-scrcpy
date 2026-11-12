@@ -38,7 +38,9 @@ import com.scrcpy.adb.AdbClient
 import com.scrcpy.adb.AdbCrypto
 import com.scrcpy.client.usb.AdbUsbTransport
 import com.scrcpy.protocol.ControlMessage
+import com.scrcpy.protocol.TouchEventAction
 import com.scrcpy.protocol.TouchMapper
+import com.scrcpy.protocol.TouchPointerInput
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -536,38 +538,28 @@ fun MirrorScreen(
 
                     // Multi-touch handling directly on view
                     setOnTouchListener { _, event ->
-                        val actionMasked = event.actionMasked
-                        val pointerIndex = event.actionIndex
-                        val pointerId = event.getPointerId(pointerIndex).toLong()
-
-                        val mapped = TouchMapper.mapCoordinates(
-                            touchX = event.getX(pointerIndex),
-                            touchY = event.getY(pointerIndex),
+                        val touchAction = TouchEventAction.fromAndroidActionMasked(event.actionMasked)
+                        val pointers = List(event.pointerCount) { index ->
+                            TouchPointerInput(
+                                pointerId = event.getPointerId(index).toLong(),
+                                x = event.getX(index),
+                                y = event.getY(index),
+                                pressure = event.getPressure(index)
+                            )
+                        }
+                        val messages = TouchMapper.buildTouchControlMessages(
+                            action = touchAction,
+                            actionIndex = event.actionIndex,
+                            pointers = pointers,
                             viewWidth = viewW,
                             viewHeight = viewH,
                             videoWidth = sessionManager.targetWidth,
                             videoHeight = sessionManager.targetHeight
-                        ) ?: return@setOnTouchListener true
-
-                        val scrcpyAction = when (actionMasked) {
-                            android.view.MotionEvent.ACTION_DOWN, android.view.MotionEvent.ACTION_POINTER_DOWN -> ControlMessage.ACTION_DOWN
-                            android.view.MotionEvent.ACTION_UP, android.view.MotionEvent.ACTION_POINTER_UP -> ControlMessage.ACTION_UP
-                            android.view.MotionEvent.ACTION_MOVE -> ControlMessage.ACTION_MOVE
-                            else -> ControlMessage.ACTION_CANCEL
-                        }
-
-                        sessionManager.sendControlMessage(
-                            ControlMessage.InjectTouchEvent(
-                                action = scrcpyAction,
-                                pointerId = pointerId,
-                                x = mapped.x.toInt(),
-                                y = mapped.y.toInt(),
-                                screenWidth = sessionManager.targetWidth,
-                                screenHeight = sessionManager.targetHeight,
-                                pressure = event.getPressure(pointerIndex)
-                            )
                         )
-                        true
+                        if (messages.isNotEmpty()) {
+                            sessionManager.sendControlMessages(messages)
+                        }
+                        touchAction != TouchEventAction.OTHER
                     }
                 }
             },
